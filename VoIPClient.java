@@ -80,9 +80,7 @@ public class VoIPClient {
         openSipSocket();
         openMediaSockets();
 
-        System.out.println("Client initialized on IP: " + localIP);
-        System.out.println("Local profile: " + localProfile.name);
-        printProfile(localProfile);
+        printStartupSummary();
     }
 
     public void startListening() {
@@ -310,9 +308,14 @@ public class VoIPClient {
 
     private synchronized void showSessionStatus() {
         System.out.println("\n================ SESSION STATUS ================");
+        System.out.println("Local IP          : " + localIP);
+        System.out.println("Local profile     : " + localProfile.name);
+        System.out.println("Local SIP         : " + printableEndpoint(localIP, localProfile.sipPort));
+        System.out.println("Local RTP/RTCP    : " + printableEndpoint(localIP, localProfile.rtpPort) + " / " + localProfile.rtcpPort);
+        System.out.println("Default remote SIP: " + localProfile.defaultRemoteSipPort);
         System.out.println("In call          : " + inCall);
         System.out.println("Mode             : " + currentCallMode);
-        System.out.println("Audio file        : " + selectedAudioFile);
+        System.out.println("Audio file       : " + selectedAudioFile);
         System.out.println("Waiting final SIP: " + waitingForFinalResponse);
         System.out.println("Remote SIP       : " + printableEndpoint(remoteIP, remoteSipPort));
         System.out.println("Remote RTP/RTCP  : " + printableEndpoint(remoteIP, remoteRtpPort) + " / " + remoteRtcpPort);
@@ -761,6 +764,16 @@ public class VoIPClient {
                            " Default Remote SIP=" + profile.defaultRemoteSipPort);
     }
 
+    private void printStartupSummary() {
+        System.out.println("\n================ LOCAL SESSION =================");
+        System.out.println("Detected local IP : " + localIP);
+        System.out.println("Selected profile  : " + localProfile.name);
+        System.out.println("Local SIP         : " + printableEndpoint(localIP, localProfile.sipPort));
+        System.out.println("Local RTP/RTCP    : " + printableEndpoint(localIP, localProfile.rtpPort) + " / " + localProfile.rtcpPort);
+        System.out.println("Default remote SIP: " + localProfile.defaultRemoteSipPort);
+        System.out.println("================================================");
+    }
+
     private static void showMainMenu() {
         System.out.println("\n=================== ACTIONS ===================");
         System.out.println("1. Start a call");
@@ -769,25 +782,13 @@ public class VoIPClient {
         System.out.println("4. Send malformed SIP packet");
         System.out.println("5. Show help");
         System.out.println("6. Quit");
-        System.out.println("You can also use legacy commands like:");
-        System.out.println("  call <IP> <sipPort> <file|mic|twoway> [audioFile]");
-        System.out.println("  hangup");
-        System.out.println("  status");
-        System.out.println("  garbage");
-        System.out.println("  quit");
         System.out.println("================================================");
     }
 
     private static void showHelp() {
-        System.out.println("\nHow to test:");
-        System.out.println("- Use Profile A on one side and Profile B on the other, or choose Custom.");
-        System.out.println("- The caller now only needs the remote SIP IP/port.");
-        System.out.println("- RTP and RTCP destinations are learned from SDP.");
-        System.out.println("- Wireshark filters:");
-        System.out.println("  sip");
-        System.out.println("  rtp");
-        System.out.println("  rtcp");
-        System.out.println("  udp.port == 5060 || udp.port == 5062 || udp.port == 8000 || udp.port == 8001 || udp.port == 8002 || udp.port == 8003");
+        System.out.println("\nHelp:");
+        System.out.println("- Use the menu to start calls, hang up, inspect status, or quit.");
+        System.out.println("- Detailed setup, Wireshark guidance, and legacy command examples are in README.md.");
     }
 
     private static String prompt(BufferedReader reader, String question) throws IOException {
