@@ -10,13 +10,16 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -75,7 +78,7 @@ public class VoIPClient {
     public VoIPClient(PortsProfile localProfile) throws Exception {
         this.localProfile = localProfile;
         this.remoteSipPort = localProfile.defaultRemoteSipPort;
-        this.localIP = InetAddress.getLocalHost().getHostAddress();
+        this.localIP = detectBestLocalIPv4();
 
         openSipSocket();
         openMediaSockets();
@@ -148,6 +151,20 @@ public class VoIPClient {
             String responseBody = buildSdpBody(localProfile.rtpPort, localProfile.rtcpPort, currentCallMode, false);
             sendSimpleResponse(senderIP, senderPort, "SIP/2.0 200 OK", sipMessage, true, responseBody);
         } else if (firstLine.startsWith("SIP/2.0 200 OK")) {
+            String cseqHeader = sipMessage.headerOrDefault("CSeq", "");
+            String cseqMethod = extractCSeqMethod(cseqHeader);
+
+            if ("BYE".equalsIgnoreCase(cseqMethod)) {
+                waitingForFinalResponse = false;
+                System.out.println(">>> Remote confirmed call teardown with 200 OK.");
+                return;
+            }
+
+            if (!"INVITE".equalsIgnoreCase(cseqMethod)) {
+                System.out.println(">>> Received 200 OK for unsupported CSeq method: " + cseqHeader);
+                return;
+            }
+
             waitingForFinalResponse = false;
             remoteIP = senderIP;
             remoteSipPort = senderPort;
@@ -736,8 +753,44 @@ public class VoIPClient {
         }
     }
 
+    private static String extractCSeqMethod(String cseqHeader) {
+        String[] parts = cseqHeader.trim().split("\\s+");
+        return parts.length >= 2 ? parts[1].trim() : "";
+    }
+
     private static String normalizeHost(String host) throws UnknownHostException {
         return InetAddress.getByName(host).getHostAddress();
+    }
+
+    private static String detectBestLocalIPv4() throws SocketException, UnknownHostException {
+        String fallbackAddress = InetAddress.getLocalHost().getHostAddress();
+        String firstUsableAddress = null;
+
+        Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+        while (interfaces.hasMoreElements()) {
+            NetworkInterface networkInterface = interfaces.nextElement();
+            if (!networkInterface.isUp() || networkInterface.isLoopback() || networkInterface.isVirtual()) {
+                continue;
+            }
+
+            Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+            while (addresses.hasMoreElements()) {
+                InetAddress address = addresses.nextElement();
+                if (!(address instanceof Inet4Address) || address.isLoopbackAddress()) {
+                    continue;
+                }
+
+                if (firstUsableAddress == null) {
+                    firstUsableAddress = address.getHostAddress();
+                }
+
+                if (address.isSiteLocalAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+        }
+
+        return firstUsableAddress != null ? firstUsableAddress : fallbackAddress;
     }
 
     private static String buildTag() {
