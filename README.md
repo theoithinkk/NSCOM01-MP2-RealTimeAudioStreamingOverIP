@@ -63,6 +63,21 @@ Important:
 - SIP still uses the destination IP and SIP port you dial
 - RTP and RTCP destination ports are learned from the remote SDP body
 
+### Sample device pairing
+
+If one device uses the default Profile A settings, the other device should use the default Profile B settings.
+
+| Device | Local SIP | Local RTP | Local RTCP | Default Remote SIP |
+| --- | ---: | ---: | ---: | ---: |
+| Device A | 5060 | 8000 | 8001 | 5062 |
+| Device B | 5062 | 8002 | 8003 | 5060 |
+
+This means:
+
+- if Device A uses Profile A, Device B should use Profile B
+- if Device B uses Profile B, Device A should use Profile A
+- the `Default Remote SIP` value should point to the other device's SIP listening port
+
 ## Requirements
 
 - Java JDK 8 or newer
