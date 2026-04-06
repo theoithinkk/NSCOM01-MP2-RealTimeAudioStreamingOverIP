@@ -30,7 +30,8 @@ import java.util.Random;
  */
 public class VoIPClient {
 
-    private static final int RTP_HEADER_SIZE = 12;
+    // This code handles SIP call setup, SDP negotiation, and RTP media streaming.
+    private static final int RTP_HEADER_SIZE = 12; // RTP header is always 12 bytes (RTP Standard)
     private static final int SAMPLE_RATE = 8000;
     private static final int SAMPLE_SIZE_BYTES = 2;
     private static final int CHANNELS = 1;
@@ -38,7 +39,7 @@ public class VoIPClient {
     private static final int AUDIO_SAMPLES_PER_FRAME = SAMPLE_RATE * FRAME_DURATION_MS / 1000;
     private static final int AUDIO_BYTES_PER_FRAME = AUDIO_SAMPLES_PER_FRAME * SAMPLE_SIZE_BYTES * CHANNELS;
     private static final int RTP_PAYLOAD_TYPE = 96;
-    private static final long NTP_UNIX_EPOCH_OFFSET = 2208988800L;
+    private static final long NTP_UNIX_EPOCH_OFFSET = 2208988800L; // used for RTCP timestamp conversion (NTP vs UNIX time)
 
     private final AudioFormat audioFormat = new AudioFormat(SAMPLE_RATE, 16, 1, true, false);
     private final PortsProfile localProfile;
@@ -86,7 +87,12 @@ public class VoIPClient {
         printStartupSummary();
     }
 
+    // Start the SIP listener thread once the object is created.
+    // The listener will keep processing incoming SIP packets while the main thread
+    // can continue to interact with the user.
     public void startListening() {
+        // Start a background thread to listen for incoming SIP messages.
+        // This keeps the main menu responsive while the client can still receive INVITEs.
         Thread sipListener = new Thread(() -> {
             while (running) {
                 try {
@@ -117,6 +123,8 @@ public class VoIPClient {
     }
 
     private synchronized void handleSipMessage(String message, String senderIP, int senderPort) throws Exception {
+        // Parse the incoming SIP packet and decide how to respond.
+        // The client supports INVITE, 180/200 responses, ACK, BYE and simple error handling.
         SipMessage sipMessage = SipMessage.parse(message);
         String firstLine = sipMessage.startLine;
 
@@ -205,6 +213,10 @@ public class VoIPClient {
     }
 
     public synchronized void call(String targetIP, int targetSipPort, String mode, String audioFilePath) {
+        // Outgoing call logic:
+        // 1) prepare remote target information
+        // 2) build an INVITE with local SDP
+        // 3) send the SIP INVITE and wait for remote answer
         try {
             if (inCall) {
                 System.out.println("Finish the active call first before starting a new one.");
@@ -241,6 +253,8 @@ public class VoIPClient {
     }
 
     public synchronized void hangUp() {
+        // Send a BYE message to the remote side and tear down the local session.
+        // This works for both outgoing and incoming calls.
         if (!inCall && activeCallId.isEmpty()) {
             System.out.println("You are not currently in a call.");
             return;
@@ -253,6 +267,9 @@ public class VoIPClient {
     }
 
     private synchronized void startEstablishedMedia() {
+        // Once the SIP handshaking is complete, start RTP/RTCP media.
+        // This is where the call is officially established and audio streaming begins.
+        // The call is ready when the remote SDP has been processed and ports are known.
         if (inCall) {
             return;
         }
@@ -281,6 +298,8 @@ public class VoIPClient {
     }
 
     private synchronized void endCallLocally(boolean reopenMediaSockets) {
+        // Tear down the local side of the call and optionally reopen media sockets.
+        // This keeps signaling separate from the actual RTP/RTCP cleanup.
         inCall = false;
         localMediaDirectionSend = false;
         closeAudioResources();
@@ -306,6 +325,7 @@ public class VoIPClient {
     }
 
     private synchronized void shutdownClient() {
+        // Cleanly shut down the client, stop all threads, and close network resources.
         running = false;
         inCall = false;
         closeAudioResources();
@@ -346,6 +366,8 @@ public class VoIPClient {
     }
 
     private String buildInviteRequest(String targetIP, String body) {
+        // Build a SIP INVITE request that includes local SDP and call identifiers.
+        // The INVITE is the first message in the SIP call setup handshake.
         StringBuilder builder = new StringBuilder();
         builder.append("INVITE sip:").append(targetIP).append(":").append(remoteSipPort).append(" SIP/2.0\r\n");
         builder.append("Via: SIP/2.0/UDP ").append(localIP).append(":").append(localProfile.sipPort).append(";branch=").append(buildBranch()).append("\r\n");
@@ -365,6 +387,8 @@ public class VoIPClient {
     }
 
     private String buildAckRequest() {
+        // Build a SIP ACK request to confirm the final 200 OK response.
+        // ACK completes the three-way handshake for INVITE-based sessions.
         StringBuilder builder = new StringBuilder();
         builder.append("ACK sip:").append(remoteIP).append(":").append(remoteSipPort).append(" SIP/2.0\r\n");
         builder.append("Via: SIP/2.0/UDP ").append(localIP).append(":").append(localProfile.sipPort).append(";branch=").append(buildBranch()).append("\r\n");
@@ -379,6 +403,8 @@ public class VoIPClient {
     }
 
     private String buildByeRequest() {
+        // Build a SIP BYE request to terminate the active call.
+        // Uses the same Call-ID and tags to identify the existing dialog.
         String fromUser = localMediaDirectionSend ? "caller" : "receiver";
         String toUser = localMediaDirectionSend ? "receiver" : "caller";
 
@@ -400,6 +426,8 @@ public class VoIPClient {
     }
 
     private void sendSimpleResponse(String targetIP, int targetPort, String statusLine, SipMessage request, boolean includeBody, String body) {
+        // Send a server-style SIP response to an incoming request.
+        // The response preserves the Via/From/To/Call-ID/CSeq headers from the original request.
         String payloadBody = includeBody && body != null ? body : "";
         StringBuilder builder = new StringBuilder();
         builder.append(statusLine).append("\r\n");
@@ -419,6 +447,8 @@ public class VoIPClient {
     }
 
     private synchronized void sendSipRequest(String msg, String targetIP, int targetPort) {
+        // Send a raw SIP message over UDP to the target address.
+        // We consider SIP transport unreliable and do not implement retransmissions here.
         try {
             byte[] buffer = msg.getBytes(StandardCharsets.UTF_8);
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(targetIP), targetPort);
@@ -429,6 +459,8 @@ public class VoIPClient {
     }
 
     private String buildSdpBody(int offeredRtpPort, int offeredRtcpPort, String mode, boolean callerSide) {
+        // Build a minimal SDP body describing the local media session.
+        // It advertises the codec, RTP port, RTCP port, and media direction for the call.
         String direction;
         if ("twoway".equals(mode)) {
             direction = "a=sendrecv\r\n";
@@ -451,6 +483,8 @@ public class VoIPClient {
     }
 
     private void startRtpSenderFile(String filePath) {
+        // When sending recorded audio, read the file in fixed frame chunks and packetize each one.
+        // Timing is approximated by sleeping for the frame duration between sends.
         Thread fileSender = new Thread(() -> {
             try {
                 File audioFile = new File(filePath);
@@ -492,6 +526,8 @@ public class VoIPClient {
     }
 
     private void startRtpSenderMic() {
+        // Capture live microphone audio and stream it over RTP in real time.
+        // The microphone thread keeps writing payloads until the call ends.
         Thread micSender = new Thread(() -> {
             try {
                 DataLine.Info info = new DataLine.Info(TargetDataLine.class, audioFormat);
@@ -527,6 +563,8 @@ public class VoIPClient {
     }
 
     private synchronized void sendRtpPacket(byte[] payload, int payloadLength) throws Exception {
+        // Assemble a simple RTP packet with a fixed RTP header and raw audio payload.
+        // This implementation does not support sequence number loss recovery or RTP extensions.
         if (!inCall || rtpSocket == null || rtpSocket.isClosed()) {
             return;
         }
@@ -561,6 +599,8 @@ public class VoIPClient {
     }
 
     private void startRtpReceiver() {
+        // Receive RTP packets from the peer and play audio through the local speakers.
+        // We ignore packets that do not contain at least the RTP header length.
         Thread receiver = new Thread(() -> {
             DatagramSocket localRtpSocket = rtpSocket;
             if (localRtpSocket == null) {
@@ -604,6 +644,8 @@ public class VoIPClient {
     }
 
     private void startRtcpSender() {
+        // Periodically send RTCP sender reports to provide basic session statistics.
+        // This helps demonstrate RTCP behavior even though remote reports are not processed.
         Thread rtcpSender = new Thread(() -> {
             DatagramSocket localRtcpSocket = rtcpSocket;
             if (localRtcpSocket == null) {
@@ -637,6 +679,8 @@ public class VoIPClient {
     }
 
     private synchronized byte[] buildRtcpSenderReport() {
+        // Build a minimal RTCP sender report containing SSRC, NTP time, RTP timestamp,
+        // packet count and octet count for the current call.
         ByteBuffer buffer = ByteBuffer.allocate(28);
         buffer.order(ByteOrder.BIG_ENDIAN);
 
@@ -659,6 +703,8 @@ public class VoIPClient {
     }
 
     private synchronized void resetSessionCounters() {
+        // Reset RTP counters and choose a new SSRC for each call session.
+        // This avoids reusing the same RTP source identifier across different calls.
         rtpPacketsSent = 0;
         rtpOctetsSent = 0;
         lastRtpTimestamp = 0;
@@ -666,6 +712,8 @@ public class VoIPClient {
     }
 
     private void openSipSocket() throws SocketException {
+        // Open the local UDP socket used for SIP signaling.
+        // Incoming SIP requests and responses arrive on this socket.
         sipSocket = new DatagramSocket(localProfile.sipPort);
     }
 
@@ -722,7 +770,7 @@ public class VoIPClient {
             try {
                 currentFileStream.close();
             } catch (IOException ignored) {
-                // Nothing else to do during shutdown.
+                // SHUTDOWN
             }
             currentFileStream = null;
         }
@@ -1019,6 +1067,7 @@ public class VoIPClient {
     }
 
     private static final class SessionDescription {
+        // Simple SDP parser used to extract the remote RTP/RTCP ports and codec.
         private final String connectionAddress;
         private final int audioPort;
         private final int rtcpPort;
@@ -1032,6 +1081,8 @@ public class VoIPClient {
         }
 
         private static SessionDescription parse(String sdpBody, String fallbackIp) {
+            // Parse a minimal SDP description and extract remote connection details.
+            // Only the connection address, audio port, RTCP port and codec are needed.
             String connectionAddress = fallbackIp;
             int audioPort = 0;
             int rtcpPort = 0;
