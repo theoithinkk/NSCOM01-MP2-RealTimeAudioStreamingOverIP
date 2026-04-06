@@ -3,9 +3,9 @@
 Java-based VoIP client for the **NSCOM01 MCO2** project. The application uses:
 
 - **SIP over UDP** for call signaling
-- **SDP** for simple session description
+- **SDP** for session negotiation
 - **RTP over UDP** for audio streaming
-- **RTCP over UDP** for basic sender reports
+- **RTCP over UDP** for standards-based Sender Reports
 
 It supports three call modes:
 
@@ -27,33 +27,41 @@ MC02/
 
 The client uses:
 
-- PCM
+- PCM linear audio
 - 8000 Hz
 - 16-bit
 - Mono
 
 ## Features
 
-- SIP-style `INVITE`, `200 OK`, `ACK`, and `BYE` signaling
-- SDP payload included in call setup messages
-- RTP packet construction over UDP
-- RTCP sender reports every 5 seconds
-- Localhost profile selection to avoid port conflicts on one machine
-- Basic malformed-packet handling for stability testing
+- SIP `INVITE`, `200 OK`, `ACK`, and `BYE` signaling with stronger SIP headers
+- SDP offer/answer exchange that negotiates remote RTP and RTCP ports
+- RTP packet construction with sequence number, timestamp, and SSRC
+- RTCP Sender Reports every 5 seconds using the standard RTCP SR packet format
+- Built-in localhost profiles plus custom user-defined port profiles
+- Menu-driven console interface with legacy command support
+- Graceful call teardown that closes media sockets and reopens clean ones for the next call
 
 ## Port Profiles
 
-To make same-machine testing easier, the app provides two localhost profiles:
+The app includes two built-in profiles for same-machine testing:
 
-| Profile | SIP | RTP | RTCP |
-| --- | ---: | ---: | ---: |
-| A | 5060 | 8000 | 8001 |
-| B | 5062 | 8002 | 8003 |
+| Profile | SIP | RTP | RTCP | Default Remote SIP |
+| --- | ---: | ---: | ---: | ---: |
+| A | 5060 | 8000 | 8001 | 5062 |
+| B | 5062 | 8002 | 8003 | 5060 |
 
-When using two terminals on one computer:
+You can also choose **Custom** at startup and define:
 
-- Terminal 1: choose **Profile B**
-- Terminal 2: choose **Profile A**
+- Local SIP port
+- Local RTP port
+- Local RTCP port
+- Default remote SIP port
+
+Important:
+
+- SIP still uses the destination IP and SIP port you dial
+- RTP and RTCP destination ports are learned from the remote SDP body
 
 ## Requirements
 
@@ -71,18 +79,31 @@ javac VoIPClient.java
 java VoIPClient
 ```
 
-When prompted, choose:
+At launch, choose:
 
 - `1` for **Profile A**
 - `2` for **Profile B**
+- `3` for **Custom**
 
-## Available Commands
+## Interface
+
+After startup, the program shows a menu:
 
 ```text
-call <IP> file
-call <IP> mic
-call <IP> twoway
+1. Start a call
+2. Hang up
+3. Show session status
+4. Send malformed SIP packet
+5. Show help
+6. Quit
+```
+
+It also supports legacy commands:
+
+```text
+call <IP> <sipPort> <file|mic|twoway>
 hangup
+status
 garbage
 quit
 ```
@@ -99,13 +120,17 @@ In the first terminal:
 java VoIPClient
 ```
 
-Select:
+Choose:
 
 ```text
 2
 ```
 
-This starts **Profile B** on ports `5062 / 8002 / 8003`.
+This starts **Profile B** on:
+
+- SIP `5062`
+- RTP `8002`
+- RTCP `8003`
 
 ### 2. Start the caller
 
@@ -115,32 +140,40 @@ In the second terminal:
 java VoIPClient
 ```
 
-Select:
+Choose:
 
 ```text
 1
 ```
 
-This starts **Profile A** on ports `5060 / 8000 / 8001`.
+This starts **Profile A** on:
 
-### 3. Run test calls
+- SIP `5060`
+- RTP `8000`
+- RTCP `8001`
 
-Use Terminal 2 and call:
+### 3. Start a call
 
-```bash
-call 127.0.0.1 file
+From the caller, either use the menu:
+
+```text
+1
+Remote IP or hostname: 127.0.0.1
+Remote SIP port [5062]:
+Call mode (file/mic/twoway): file
 ```
 
-or
+or use the legacy command:
 
 ```bash
-call 127.0.0.1 mic
+call 127.0.0.1 5062 file
 ```
 
-or
+For other tests:
 
 ```bash
-call 127.0.0.1 twoway
+call 127.0.0.1 5062 mic
+call 127.0.0.1 5062 twoway
 ```
 
 ## Test Scenarios
@@ -150,13 +183,15 @@ call 127.0.0.1 twoway
 Command:
 
 ```bash
-call 127.0.0.1 file
+call 127.0.0.1 5062 file
 ```
 
 Expected behavior:
 
 - SIP handshake completes with `INVITE`, `200 OK`, and `ACK`
+- SDP negotiates the receiver RTP and RTCP ports
 - `sample_audio.wav` is streamed over RTP
+- RTCP Sender Reports are transmitted every 5 seconds
 - The receiving side plays the audio through speakers
 - The call ends automatically when the file finishes
 
@@ -165,13 +200,14 @@ Expected behavior:
 Command:
 
 ```bash
-call 127.0.0.1 mic
+call 127.0.0.1 5062 mic
 ```
 
 Expected behavior:
 
 - Caller captures live microphone input
-- Audio is streamed to the receiver
+- Receiver advertises media ports through SDP
+- Audio is streamed to the negotiated RTP port
 - Receiver plays the incoming stream
 - Use `hangup` to end the call
 
@@ -180,19 +216,26 @@ Expected behavior:
 Command:
 
 ```bash
-call 127.0.0.1 twoway
+call 127.0.0.1 5062 twoway
 ```
 
 Expected behavior:
 
+- Both clients exchange SDP
 - Both clients open microphone and speaker lines
 - Audio flows in both directions
-- You may hear slight delay or echo during local testing
+- RTCP Sender Reports are sent by both sides
 - Use `hangup` to end the call
 
 ### D. Error Handling
 
 Command:
+
+```text
+4
+```
+
+or:
 
 ```bash
 garbage
@@ -200,7 +243,7 @@ garbage
 
 Expected behavior:
 
-- A malformed message is sent to the SIP port
+- A malformed message is sent to the most recent SIP destination
 - The receiver ignores it safely
 - The program continues running without crashing
 
@@ -228,65 +271,115 @@ Client initialized on IP: 192.168.1.50
 
 ### 3. Start each side
 
-- Computer A (caller): choose **Profile A**
-- Computer B (receiver): choose **Profile B**
+- Computer A: choose any local profile
+- Computer B: choose any local profile
+- Make sure the caller knows the receiver's **SIP port**
 
-Then call the receiver using its real local network IP:
+Then call the receiver using its real local network IP and SIP port:
 
 ```bash
-call 192.168.1.50 twoway
+call 192.168.1.50 5062 twoway
 ```
 
-You can also replace `twoway` with `file` or `mic`.
+You can replace `twoway` with `file` or `mic`.
+
+RTP and RTCP will be learned from the receiver's SDP response.
 
 ## Wireshark Verification
 
 For localhost testing, capture on:
 
-- **Windows:** Loopback adapter
-- **macOS / Linux:** `lo0` or loopback interface
+- **Windows:** Npcap Loopback Adapter / loopback interface
+- **macOS / Linux:** `lo0` or the loopback interface
 
-### SIP and RTP traffic
+### SIP signaling
 
-Use this display filter:
+Use:
 
 ```text
-udp.port in {5060, 5062, 8000, 8001, 8002, 8003}
+sip
 ```
 
 You should see:
 
-- SIP text messages such as `INVITE`, `200 OK`, and `ACK`
-- RTP packets flowing between the RTP ports
+- `INVITE`
+- `200 OK`
+- `ACK`
+- `BYE`
 
-### RTCP traffic
+You can also inspect the SDP body inside `INVITE` and `200 OK`.
 
-Use this filter:
+Things to verify:
+
+- `m=audio <port>` advertises the RTP port
+- `a=rtcp:<port>` advertises the RTCP port
+- `a=rtpmap:96 L16/8000/1` advertises the codec
+
+### RTP media
+
+Use:
+
+```text
+rtp
+```
+
+If Wireshark does not auto-detect RTP, use:
+
+```text
+udp.port == 8000 || udp.port == 8002
+```
+
+or your custom RTP ports, then right-click a packet and choose:
+
+```text
+Decode As... -> RTP
+```
+
+You should see:
+
+- RTP packets on the negotiated media ports
+- Sequence numbers increasing
+- Timestamps increasing
+- A consistent SSRC value per media stream
+
+### RTCP Sender Reports
+
+Use:
+
+```text
+rtcp
+```
+
+or filter by the negotiated RTCP ports:
 
 ```text
 udp.port == 8001 || udp.port == 8003
 ```
 
-Then:
+You should now see **real RTCP Sender Reports**, not ASCII text payloads.
 
-1. Start a call.
-2. Wait at least 10 seconds.
-3. Open one of the UDP packets in Wireshark.
-4. Inspect the packet data payload.
+Things to verify:
 
-You should find text similar to:
+- Version `2`
+- Packet type `200` for Sender Report
+- SSRC present
+- Sender's packet count increases over time
+- Sender's octet count increases over time
+
+### Combined filter
+
+For the default localhost profiles, this filter captures the whole demo:
 
 ```text
-RTCP Sender Report - Packet Count Approx: 250
+udp.port == 5060 || udp.port == 5062 || udp.port == 8000 || udp.port == 8001 || udp.port == 8002 || udp.port == 8003
 ```
-
-The value increases as more reports are sent.
 
 ## Notes
 
-- `sample_audio.wav` must be present in the same directory as `VoIPClient.java` when using `file` mode.
-- Localhost two-way mode may produce echo because both sides run on the same machine.
-- The RTP receiver socket uses a timeout so the app can exit the media loop cleanly when the call ends.
+- `sample_audio.wav` must be present in the same directory as `VoIPClient.java` when using `file` mode
+- Localhost two-way mode may produce echo because both sides run on the same machine
+- The RTP receiver socket uses a timeout so the app can exit the media loop cleanly when the call ends
+- During teardown, media sockets are closed and reopened so the next call starts from a clean state
 
 ## Reference
 
