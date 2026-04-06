@@ -126,6 +126,8 @@ public class VoIPClient {
                 return;
             }
 
+            localIP = resolveLocalAddressForRemote(senderIP, senderPort);
+
             SessionDescription remoteSession = SessionDescription.parse(sipMessage.body, senderIP);
             remoteIP = remoteSession.connectionAddress;
             remoteSipPort = senderPort;
@@ -214,6 +216,7 @@ public class VoIPClient {
 
             remoteIP = normalizeHost(targetIP);
             remoteSipPort = targetSipPort;
+            localIP = resolveLocalAddressForRemote(remoteIP, remoteSipPort);
             remoteRtpPort = 0;
             remoteRtcpPort = 0;
             remoteCodec = "pending";
@@ -760,6 +763,24 @@ public class VoIPClient {
 
     private static String normalizeHost(String host) throws UnknownHostException {
         return InetAddress.getByName(host).getHostAddress();
+    }
+
+    private static String resolveLocalAddressForRemote(String remoteIp, int remotePort) {
+        try (DatagramSocket probeSocket = new DatagramSocket()) {
+            probeSocket.connect(InetAddress.getByName(remoteIp), remotePort);
+            InetAddress chosen = probeSocket.getLocalAddress();
+            if (chosen != null && chosen.getHostAddress() != null && !chosen.isAnyLocalAddress()) {
+                return chosen.getHostAddress();
+            }
+        } catch (Exception ignored) {
+            // Fall back to the broader interface scan below.
+        }
+
+        try {
+            return detectBestLocalIPv4();
+        } catch (Exception ignored) {
+            return remoteIp;
+        }
     }
 
     private static String detectBestLocalIPv4() throws SocketException, UnknownHostException {
