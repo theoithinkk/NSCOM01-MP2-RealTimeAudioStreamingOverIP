@@ -56,6 +56,8 @@ public class VoIPClient {
     private volatile int remoteRtpPort;
     private volatile int remoteRtcpPort;
     private volatile String remoteCodec = "L16/8000/1";
+    private volatile boolean waitingForFinalResponse = false;
+    private volatile String selectedAudioFile = "sample_audio.wav";
 
     private volatile String localTag = buildTag();
     private volatile String remoteTag = "";
@@ -142,9 +144,13 @@ public class VoIPClient {
             ensureMediaSocketsOpen();
             resetSessionCounters();
 
+            sendSimpleResponse(senderIP, senderPort, "SIP/2.0 180 Ringing", sipMessage, false, null);
+            System.out.println(">>> Sent 180 Ringing to caller.");
+
             String responseBody = buildSdpBody(localProfile.rtpPort, localProfile.rtcpPort, currentCallMode, false);
             sendSimpleResponse(senderIP, senderPort, "SIP/2.0 200 OK", sipMessage, true, responseBody);
         } else if (firstLine.startsWith("SIP/2.0 200 OK")) {
+            waitingForFinalResponse = false;
             remoteIP = senderIP;
             remoteSipPort = senderPort;
             remoteTag = extractTag(sipMessage.headerOrDefault("To", ""));
@@ -160,6 +166,12 @@ public class VoIPClient {
 
             sendSipRequest(buildAckRequest(), remoteIP, remoteSipPort);
             startEstablishedMedia();
+        } else if (firstLine.startsWith("SIP/2.0 180 Ringing")) {
+            waitingForFinalResponse = true;
+            remoteIP = senderIP;
+            remoteSipPort = senderPort;
+            remoteTag = extractTag(sipMessage.headerOrDefault("To", ""));
+            System.out.println(">>> Remote endpoint is ringing...");
         } else if (firstLine.startsWith("ACK")) {
             startEstablishedMedia();
         } else if (firstLine.startsWith("BYE")) {
@@ -167,6 +179,7 @@ public class VoIPClient {
             sendSimpleResponse(senderIP, senderPort, "SIP/2.0 200 OK", sipMessage, false, null);
             endCallLocally(true);
         } else if (firstLine.matches("^SIP/2\\.0 [45]\\d{2}.*")) {
+            waitingForFinalResponse = false;
             System.err.println(">>> SIP Error received from remote: " + firstLine);
             endCallLocally(true);
         } else {
@@ -174,7 +187,7 @@ public class VoIPClient {
         }
     }
 
-    public synchronized void call(String targetIP, int targetSipPort, String mode) {
+    public synchronized void call(String targetIP, int targetSipPort, String mode, String audioFilePath) {
         try {
             if (inCall) {
                 System.out.println("Finish the active call first before starting a new one.");
@@ -190,15 +203,20 @@ public class VoIPClient {
             remoteRtcpPort = 0;
             remoteCodec = "pending";
             currentCallMode = mode.toLowerCase(Locale.ROOT);
+            selectedAudioFile = (audioFilePath == null || audioFilePath.trim().isEmpty()) ? "sample_audio.wav" : audioFilePath.trim();
             localMediaDirectionSend = true;
             activeCallId = buildCallId();
             localTag = buildTag();
             remoteTag = "";
             localInviteCSeq = 1;
+            waitingForFinalResponse = true;
 
             String inviteBody = buildSdpBody(localProfile.rtpPort, localProfile.rtcpPort, currentCallMode, true);
             sendSipRequest(buildInviteRequest(remoteIP, inviteBody), remoteIP, remoteSipPort);
             System.out.println(">>> Calling " + remoteIP + ":" + remoteSipPort + " in " + currentCallMode.toUpperCase(Locale.ROOT) + " mode...");
+            if ("file".equals(currentCallMode)) {
+                System.out.println(">>> Selected audio file: " + selectedAudioFile);
+            }
         } catch (Exception e) {
             System.err.println("Unable to start call: " + e.getMessage());
         }
@@ -236,7 +254,7 @@ public class VoIPClient {
         startRtcpSender();
 
         if ("file".equals(currentCallMode) && localMediaDirectionSend) {
-            startRtpSenderFile("sample_audio.wav");
+            startRtpSenderFile(selectedAudioFile);
         } else if (localMediaDirectionSend) {
             startRtpSenderMic();
         } else {
@@ -264,6 +282,7 @@ public class VoIPClient {
         remoteRtpPort = 0;
         remoteRtcpPort = 0;
         remoteCodec = "L16/8000/1";
+        waitingForFinalResponse = false;
 
         System.out.println(">>> Call ended. Media sockets reset.");
     }
@@ -293,6 +312,8 @@ public class VoIPClient {
         System.out.println("\n================ SESSION STATUS ================");
         System.out.println("In call          : " + inCall);
         System.out.println("Mode             : " + currentCallMode);
+        System.out.println("Audio file        : " + selectedAudioFile);
+        System.out.println("Waiting final SIP: " + waitingForFinalResponse);
         System.out.println("Remote SIP       : " + printableEndpoint(remoteIP, remoteSipPort));
         System.out.println("Remote RTP/RTCP  : " + printableEndpoint(remoteIP, remoteRtpPort) + " / " + remoteRtcpPort);
         System.out.println("Negotiated codec : " + remoteCodec);
@@ -419,7 +440,7 @@ public class VoIPClient {
                 currentFileStream = AudioSystem.getAudioInputStream(audioFile);
                 byte[] payload = new byte[AUDIO_BYTES_PER_FRAME];
 
-                System.out.println("Streaming 'sample_audio.wav' over RTP...");
+                System.out.println("Streaming '" + audioFile.getName() + "' over RTP...");
 
                 while (inCall) {
                     int bytesRead = currentFileStream.read(payload, 0, payload.length);
@@ -749,7 +770,7 @@ public class VoIPClient {
         System.out.println("5. Show help");
         System.out.println("6. Quit");
         System.out.println("You can also use legacy commands like:");
-        System.out.println("  call <IP> <sipPort> <file|mic|twoway>");
+        System.out.println("  call <IP> <sipPort> <file|mic|twoway> [audioFile]");
         System.out.println("  hangup");
         System.out.println("  status");
         System.out.println("  garbage");
@@ -828,7 +849,14 @@ public class VoIPClient {
                     System.out.println("Invalid mode. Use file, mic, or twoway.");
                     return;
                 }
-                client.call(targetIp, targetSipPort, mode);
+                String audioFile = "sample_audio.wav";
+                if ("file".equals(mode)) {
+                    String enteredFile = prompt(reader, "Audio file path [sample_audio.wav]: ");
+                    if (!enteredFile.isEmpty()) {
+                        audioFile = enteredFile;
+                    }
+                }
+                client.call(targetIp, targetSipPort, mode, audioFile);
                 return;
             case "2":
                 client.hangUp();
@@ -856,11 +884,12 @@ public class VoIPClient {
 
         if (parts[0].equalsIgnoreCase("call")) {
             if (parts.length < 4) {
-                System.out.println("Usage: call <IP> <sipPort> <file|mic|twoway>");
+                System.out.println("Usage: call <IP> <sipPort> <file|mic|twoway> [audioFile]");
                 return;
             }
             try {
-                client.call(parts[1], Integer.parseInt(parts[2]), parts[3]);
+                String audioFile = parts.length >= 5 ? parts[4] : "sample_audio.wav";
+                client.call(parts[1], Integer.parseInt(parts[2]), parts[3], audioFile);
             } catch (NumberFormatException e) {
                 System.out.println("Remote SIP port must be a number.");
             }

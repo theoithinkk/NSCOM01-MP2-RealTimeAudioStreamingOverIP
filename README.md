@@ -9,7 +9,7 @@ Java-based VoIP client for the **NSCOM01 MCO2** project. The application uses:
 
 It supports three call modes:
 
-- `file` - stream `sample_audio.wav`
+- `file` - stream a chosen WAV file, defaulting to `sample_audio.wav`
 - `mic` - one-way live microphone streaming
 - `twoway` - two-way microphone communication
 
@@ -34,7 +34,7 @@ The client uses:
 
 ## Features
 
-- SIP `INVITE`, `200 OK`, `ACK`, and `BYE` signaling with stronger SIP headers
+- SIP `INVITE`, `180 Ringing`, `200 OK`, `ACK`, and `BYE` signaling with stronger SIP headers
 - SDP offer/answer exchange that negotiates remote RTP and RTCP ports
 - RTP packet construction with sequence number, timestamp, and SSRC
 - RTCP Sender Reports every 5 seconds using the standard RTCP SR packet format
@@ -101,7 +101,7 @@ After startup, the program shows a menu:
 It also supports legacy commands:
 
 ```text
-call <IP> <sipPort> <file|mic|twoway>
+call <IP> <sipPort> <file|mic|twoway> [audioFile]
 hangup
 status
 garbage
@@ -161,12 +161,19 @@ From the caller, either use the menu:
 Remote IP or hostname: 127.0.0.1
 Remote SIP port [5062]:
 Call mode (file/mic/twoway): file
+Audio file path [sample_audio.wav]:
 ```
 
 or use the legacy command:
 
 ```bash
 call 127.0.0.1 5062 file
+```
+
+To stream a different WAV file:
+
+```bash
+call 127.0.0.1 5062 file lecture.wav
 ```
 
 For other tests:
@@ -189,8 +196,9 @@ call 127.0.0.1 5062 file
 Expected behavior:
 
 - SIP handshake completes with `INVITE`, `200 OK`, and `ACK`
+- A provisional `180 Ringing` is sent before `200 OK`
 - SDP negotiates the receiver RTP and RTCP ports
-- `sample_audio.wav` is streamed over RTP
+- The selected WAV file is streamed over RTP
 - RTCP Sender Reports are transmitted every 5 seconds
 - The receiving side plays the audio through speakers
 - The call ends automatically when the file finishes
@@ -269,7 +277,25 @@ Example:
 Client initialized on IP: 192.168.1.50
 ```
 
-### 3. Start each side
+### 3. Choose ports on each device
+
+Example setup:
+
+- Device A: Profile A
+- Device B: Profile B
+
+You may also use Custom on either side as long as:
+
+- each device uses its own local SIP, RTP, and RTCP ports
+- the caller knows the receiver's SIP port
+- firewalls allow UDP traffic on those ports
+
+Example custom setup:
+
+- Device A: SIP `5070`, RTP `9000`, RTCP `9001`
+- Device B: SIP `5072`, RTP `9100`, RTCP `9101`
+
+### 4. Start each side
 
 - Computer A: choose any local profile
 - Computer B: choose any local profile
@@ -284,6 +310,57 @@ call 192.168.1.50 5062 twoway
 You can replace `twoway` with `file` or `mic`.
 
 RTP and RTCP will be learned from the receiver's SDP response.
+
+### 5. What SDP negotiates between two devices
+
+The caller first sends an `INVITE` with an SDP body that advertises:
+
+- the caller IP address with `c=IN IP4 <caller-ip>`
+- the caller RTP port with `m=audio <caller-rtp-port> RTP/AVP 96`
+- the caller RTCP port with `a=rtcp:<caller-rtcp-port>`
+- the codec with `a=rtpmap:96 L16/8000/1`
+- the media direction with `a=sendonly`, `a=recvonly`, or `a=sendrecv`
+
+The receiver replies with `200 OK` and its own SDP body containing:
+
+- the receiver IP address
+- the receiver RTP port
+- the receiver RTCP port
+- the receiver codec description
+- the receiver media direction
+
+After that exchange:
+
+- SIP continues to use the receiver's SIP port
+- RTP is sent to the remote RTP port learned from SDP
+- RTCP is sent to the remote RTCP port learned from SDP
+
+This means the media path is negotiated dynamically. The caller does not need to hard-code the remote RTP or RTCP port as long as it can reach the remote SIP port.
+
+### 6. Example two-device call flow
+
+Example:
+
+- Device A IP: `192.168.1.50`
+- Device A ports: SIP `5060`, RTP `8000`, RTCP `8001`
+- Device B IP: `192.168.1.60`
+- Device B ports: SIP `5062`, RTP `8002`, RTCP `8003`
+
+Device A starts the call:
+
+```bash
+call 192.168.1.60 5062 twoway
+```
+
+Negotiation result:
+
+- SIP signaling goes to `192.168.1.60:5062`
+- Device A advertises `8000/8001` in SDP
+- Device B advertises `8002/8003` in SDP
+- Device A sends RTP to `192.168.1.60:8002`
+- Device A sends RTCP to `192.168.1.60:8003`
+- Device B sends RTP to `192.168.1.50:8000`
+- Device B sends RTCP to `192.168.1.50:8001`
 
 ## Wireshark Verification
 
@@ -303,6 +380,7 @@ sip
 You should see:
 
 - `INVITE`
+- `180 Ringing`
 - `200 OK`
 - `ACK`
 - `BYE`
@@ -314,6 +392,13 @@ Things to verify:
 - `m=audio <port>` advertises the RTP port
 - `a=rtcp:<port>` advertises the RTCP port
 - `a=rtpmap:96 L16/8000/1` advertises the codec
+- `c=IN IP4 <address>` matches the device sending that SDP
+
+For two different devices, compare the SDP in both directions:
+
+- the `INVITE` should advertise the caller's media IP and ports
+- the `200 OK` should advertise the receiver's media IP and ports
+- the RTP stream should go to the port advertised in the peer's SDP, not just the peer's SIP port
 
 ### RTP media
 
@@ -342,6 +427,11 @@ You should see:
 - Timestamps increasing
 - A consistent SSRC value per media stream
 
+For two-device testing, capture on both machines if possible:
+
+- on the caller, confirm outgoing RTP goes to the receiver's SDP-advertised RTP port
+- on the receiver, confirm incoming RTP arrives on the receiver's advertised RTP port
+
 ### RTCP Sender Reports
 
 Use:
@@ -366,6 +456,11 @@ Things to verify:
 - Sender's packet count increases over time
 - Sender's octet count increases over time
 
+For two-device testing:
+
+- the caller should send RTCP to the receiver's SDP-advertised RTCP port
+- the receiver should send RTCP to the caller's SDP-advertised RTCP port
+
 ### Combined filter
 
 For the default localhost profiles, this filter captures the whole demo:
@@ -376,7 +471,7 @@ udp.port == 5060 || udp.port == 5062 || udp.port == 8000 || udp.port == 8001 || 
 
 ## Notes
 
-- `sample_audio.wav` must be present in the same directory as `VoIPClient.java` when using `file` mode
+- For `file` mode, you can use `sample_audio.wav` or provide another WAV file path when starting the call
 - Localhost two-way mode may produce echo because both sides run on the same machine
 - The RTP receiver socket uses a timeout so the app can exit the media loop cleanly when the call ends
 - During teardown, media sockets are closed and reopened so the next call starts from a clean state
