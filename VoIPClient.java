@@ -829,10 +829,10 @@ public class VoIPClient {
                 return new PortsProfile("Profile B", 5062, 8002, 8003, 5060);
             }
             if ("3".equals(choice)) {
-                int sip = promptForInt(reader, "Local SIP port", 5070);
-                int rtp = promptForInt(reader, "Local RTP port", 9000);
+                int sip = promptForInt(reader, "Local SIP port", 5060);
+                int rtp = promptForInt(reader, "Local RTP port", 8000);
                 int rtcp = promptForInt(reader, "Local RTCP port", rtp + 1);
-                int remoteSip = promptForInt(reader, "Default remote SIP port", 5072);
+                int remoteSip = promptForInt(reader, "Default remote SIP port", 5062);
                 return new PortsProfile("Custom", sip, rtp, rtcp, remoteSip);
             }
 
